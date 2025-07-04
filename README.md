@@ -51,7 +51,7 @@ Projekt jest modularny, łatwy do testowania i rozbudowy. Może służyć jako b
 
 ## Przykładowy zrzut ekranu
 
-![Przykład działania](lives_debug.png)
+![Przykład działania](2.JPG)
 
 ## Architektura
 
