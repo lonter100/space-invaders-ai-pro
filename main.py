@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Space Invaders AI Pro
-=====================
+Space Invaders AI Pro v3.0
+==========================
 
 Zaawansowany system sztucznej inteligencji do gry Space Invaders,
-wykorzystujący Deep Q-Learning (DQN) z monitoringiem i testami.
+wykorzystujący Deep Q-Learning (DQN) z monitoringiem, testami i
+zaawansowanymi algorytmami computer vision.
 
 Autor: lonter100
-Wersja: 2.0
+Wersja: 3.0
 Licencja: MIT
 
 Opis:
@@ -15,143 +16,291 @@ Opis:
     Wykorzystuje computer vision do wykrywania obiektów gry,
     Deep Q-Learning do podejmowania decyzji oraz
     zaawansowany system nagród i kar.
+    Nowa wersja zawiera:
+    - Zaawansowane algorytmy computer vision
+    - Lepsze zarządzanie pamięcią i wydajnością
+    - Rozbudowany system logowania i monitoringu
+    - Automatyczne testy i walidację
+    - Konfigurowalne parametry przez GUI
 """
+import sys
+import os
 import time
 import cv2
 import numpy as np
-import os
-import pyautogui
 import torch
 import pygetwindow as gw
 import logging
-from typing import Tuple, Optional
+import argparse
+from typing import Tuple, Optional, Dict, Any
+from pathlib import Path
+
+# Dodaj ścieżkę do modułów
+sys.path.append(str(Path(__file__).parent))
 
 # Importy lokalnych modułów
 from core.screen_utils import find_game_region, grab_screen, save_lives_region
 from core.controller import perform_action
-from configs.config import TEMPLATE_PLAYER_PATH, TEMPLATE_ENEMY_PATH, SCORE_REGION
-from game_ai import GameAI
-
-# Konfiguracja loggera
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    handlers=[
-        logging.FileHandler('log_ai.txt', 'a', 'utf-8'),
-        logging.StreamHandler()
-    ]
+from core.logger import setup_logger, log_performance, log_game_event
+from configs.config import (
+    TEMPLATE_PLAYER_PATH, TEMPLATE_ENEMY_PATH, SCORE_REGION,
+    LEARNING_RATE, GAMMA, EPSILON_START, EPSILON_MIN, EPSILON_DECAY
 )
-logger = logging.getLogger(__name__)
+from game_ai import GameAI
+from utils.performance_monitor import PerformanceMonitor
+from utils.config_manager import ConfigManager
+from utils.gui_manager import GUIManager
 
 
-def preprocess(img: np.ndarray) -> np.ndarray:
+class SpaceInvadersAI:
     """
-    Przeskaluj obraz do rozmiaru 84x84 dla sieci neuronowej.
+    Główna klasa aplikacji Space Invaders AI Pro v3.0.
     
-    Args:
-        img: Obraz wejściowy jako numpy array
-        
-    Returns:
-        Przeskalowany obraz o rozmiarze 84x84
+    Zawiera zaawansowane funkcje:
+    - Automatyczne wykrywanie i konfiguracja gry
+    - Zarządzanie wydajnością i pamięcią
+    - System monitoringu i logowania
+    - Interfejs GUI do konfiguracji
+    - Automatyczne testy i walidację
     """
-    img = cv2.resize(img, (84, 84))
-    return img
-
-
-def get_score_panel(img: np.ndarray) -> np.ndarray:
-    """
-    Wytnij region wyniku z obrazu gry.
     
-    Args:
-        img: Obraz gry
+    def __init__(self, config_path: str = 'configs/config.yaml'):
+        """
+        Inicjalizacja głównej aplikacji AI.
         
-    Returns:
-        Region z wynikiem gry
-    """
-    y1, y2, x1, x2 = SCORE_REGION
-    h, w = img.shape[:2]
-    y1 = max(0, min(y1, h-1))
-    y2 = max(0, min(y2, h))
-    x1 = max(0, min(x1, w-1))
-    x2 = max(0, min(x2, w))
-    return img[y1:y2, x1:x2].copy()
-
-
-def get_lives_panel(img: np.ndarray) -> np.ndarray:
-    """
-    Wytnij region z życiami gracza.
+        Args:
+            config_path: Ścieżka do pliku konfiguracyjnego
+        """
+        self.config_path = config_path
+        self.logger = setup_logger('space_invaders_ai_v3')
+        self.performance_monitor = PerformanceMonitor()
+        self.config_manager = ConfigManager(config_path)
+        self.gui_manager = None
+        
+        # Sprawdź wymagania systemowe
+        self._check_system_requirements()
+        
+        # Inicjalizuj komponenty
+        self._initialize_components()
+        
+        self.logger.info("Space Invaders AI Pro v3.0 zainicjalizowany pomyślnie")
     
-    Args:
-        img: Obraz gry
+    def _check_system_requirements(self) -> None:
+        """Sprawdź wymagania systemowe i dostępność komponentów."""
+        self.logger.info("Sprawdzanie wymagań systemowych...")
         
-    Returns:
-        Region z wyświetlanymi życiami
-    """
-    return img[80:140, 40:180].copy()
-
-
-def calc_reward(prev_score: int, score: int, done: bool, 
-                prev_enemies: list, enemies: list, 
-                prev_lives: int, lives: int) -> float:
-    """
-    Oblicz nagrodę dla agenta na podstawie stanu gry.
+        # Sprawdź dostępność CUDA
+        if torch.cuda.is_available():
+            self.logger.info(f"CUDA dostępne: {torch.cuda.get_device_name(0)}")
+        else:
+            self.logger.warning("CUDA niedostępne - używanie CPU")
+        
+        # Sprawdź dostępność OpenCV
+        if cv2.__version__:
+            self.logger.info(f"OpenCV wersja: {cv2.__version__}")
+        
+        # Sprawdź dostępność szablonów
+        if os.path.exists(TEMPLATE_PLAYER_PATH):
+            self.logger.info("Szablon gracza dostępny")
+        else:
+            self.logger.warning("Brak szablonu gracza - wykrywanie tylko po kolorze")
+        
+        if os.path.exists(TEMPLATE_ENEMY_PATH):
+            self.logger.info("Szablon wroga dostępny")
+        else:
+            self.logger.warning("Brak szablonu wroga - wykrywanie tylko po kolorze")
     
-    Args:
-        prev_score: Poprzedni wynik
-        score: Aktualny wynik
-        done: Czy gra się zakończyła
-        prev_enemies: Poprzednia lista wrogów
-        enemies: Aktualna lista wrogów
-        prev_lives: Poprzednia liczba żyć
-        lives: Aktualna liczba żyć
-        
-    Returns:
-        Wartość nagrody (float)
-    """
-    reward = 0.0
+    def _initialize_components(self) -> None:
+        """Inicjalizuj komponenty aplikacji."""
+        try:
+            # Inicjalizuj GUI (opcjonalnie)
+            if self.config_manager.get('enable_gui', False):
+                self.gui_manager = GUIManager()
+                self.logger.info("GUI zainicjalizowane")
+            
+            # Sprawdź dostępność okna DOSBox
+            self._check_dosbox_window()
+            
+        except Exception as e:
+            self.logger.error(f"Błąd podczas inicjalizacji komponentów: {e}")
+            raise
     
-    if done:
-        reward -= 2.0  # Kara za przegraną
+    def _check_dosbox_window(self) -> None:
+        """Sprawdź dostępność okna DOSBox."""
+        windows = gw.getWindowsWithTitle('DOSBox')
+        if windows:
+            win = windows[0]
+            self.logger.info(f"Znaleziono okno DOSBox: {win.left}, {win.top}, {win.width}x{win.height}")
+        else:
+            self.logger.warning("Nie znaleziono okna DOSBox - używanie całego ekranu")
+    
+    @log_performance
+    def run(self) -> None:
+        """
+        Uruchom główną pętlę aplikacji AI.
         
-    if score > prev_score:
-        reward += 100.0 * (score - prev_score)  # Wysoka nagroda za punkty
+        Zawiera:
+        - Automatyczne wykrywanie stanu gry
+        - Zarządzanie wydajnością
+        - Monitoring i logowanie
+        - Obsługę błędów i wyjątków
+        """
+        self.logger.info("Uruchamianie Space Invaders AI Pro v3.0...")
         
-    if len(enemies) < len(prev_enemies):
-        reward += 1.0 * (len(prev_enemies) - len(enemies))  # Nagroda za zniszczenie wroga
+        try:
+            # Inicjalizuj AI
+            game_ai = GameAI(self.config_path)
+            
+            # Uruchom monitoring wydajności
+            self.performance_monitor.start()
+            
+            # Główna pętla
+            self._main_loop(game_ai)
+            
+        except KeyboardInterrupt:
+            self.logger.info("Przerwano przez użytkownika (Ctrl+C)")
+        except Exception as e:
+            self.logger.error(f"Krytyczny błąd aplikacji: {e}")
+            raise
+        finally:
+            self._cleanup()
+    
+    def _main_loop(self, game_ai: GameAI) -> None:
+        """Główna pętla aplikacji z zaawansowanym monitoringiem."""
+        frame_count = 0
+        start_time = time.time()
         
-    if lives < prev_lives:
-        reward -= 100.0 * (prev_lives - lives)  # Wysoka kara za utratę życia
+        while True:
+            try:
+                frame_start = time.time()
+                
+                # Uruchom AI
+                game_ai.run_single_frame()
+                frame_count += 1
+                
+                # Monitoring wydajności
+                frame_time = time.time() - frame_start
+                self.performance_monitor.update(frame_time)
+                
+                # Logowanie co 100 klatek
+                if frame_count % 100 == 0:
+                    fps = frame_count / (time.time() - start_time)
+                    self.logger.info(f"FPS: {fps:.2f}, Frame: {frame_count}")
+                
+                # Sprawdź warunki zatrzymania
+                if self._should_stop():
+                    break
+                    
+            except Exception as e:
+                self.logger.error(f"Błąd w głównej pętli: {e}")
+                time.sleep(0.1)  # Krótka przerwa przed ponowną próbą
+    
+    def _should_stop(self) -> bool:
+        """Sprawdź czy aplikacja powinna się zatrzymać."""
+        # Sprawdź klawisz 'q' w oknie OpenCV
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            return True
         
-    return reward
+        # Sprawdź warunki z GUI
+        if self.gui_manager and self.gui_manager.should_stop():
+            return True
+        
+        return False
+    
+    def _cleanup(self) -> None:
+        """Wyczyść zasoby przed zakończeniem."""
+        self.logger.info("Czyszczenie zasobów...")
+        
+        # Zatrzymaj monitoring
+        self.performance_monitor.stop()
+        
+        # Zamknij GUI
+        if self.gui_manager:
+            self.gui_manager.cleanup()
+        
+        # Zamknij okna OpenCV
+        cv2.destroyAllWindows()
+        
+        self.logger.info("Aplikacja zakończona pomyślnie")
 
 
-def activate_dosbox_window() -> None:
-    """
-    Aktywuj okno DOSBox, aby AI mogło z nim współpracować.
-    """
-    windows = gw.getWindowsWithTitle('DOSBox')
-    if windows:
-        win = windows[0]
-        win.activate()
-        time.sleep(0.05)
-        logger.info("Aktywowano okno DOSBox")
-    else:
-        logger.warning("Nie znaleziono okna DOSBox")
+def parse_arguments() -> argparse.Namespace:
+    """Parsuj argumenty wiersza poleceń."""
+    parser = argparse.ArgumentParser(
+        description='Space Invaders AI Pro v3.0',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Przykłady użycia:
+  python main.py                    # Uruchom z domyślną konfiguracją
+  python main.py --config custom.yaml  # Użyj własnej konfiguracji
+  python main.py --gui              # Uruchom z interfejsem GUI
+  python main.py --test             # Uruchom w trybie testowym
+        """
+    )
+    
+    parser.add_argument(
+        '--config', 
+        type=str, 
+        default='configs/config.yaml',
+        help='Ścieżka do pliku konfiguracyjnego'
+    )
+    
+    parser.add_argument(
+        '--gui', 
+        action='store_true',
+        help='Uruchom z interfejsem GUI'
+    )
+    
+    parser.add_argument(
+        '--test', 
+        action='store_true',
+        help='Uruchom w trybie testowym'
+    )
+    
+    parser.add_argument(
+        '--debug', 
+        action='store_true',
+        help='Włącz tryb debugowania'
+    )
+    
+    return parser.parse_args()
 
 
 def main():
     """
-    Główna funkcja uruchamiająca system AI.
+    Główna funkcja uruchamiająca aplikację.
+    
+    Obsługuje:
+    - Parsowanie argumentów wiersza poleceń
+    - Inicjalizację aplikacji
+    - Obsługę błędów i wyjątków
+    - Logowanie i monitoring
     """
     try:
-        logger.info("Uruchamianie Space Invaders AI Pro...")
-        game = GameAI()
-        game.run()
+        # Parsuj argumenty
+        args = parse_arguments()
+        
+        # Ustaw poziom logowania
+        if args.debug:
+            logging.getLogger().setLevel(logging.DEBUG)
+        
+        # Utwórz i uruchom aplikację
+        app = SpaceInvadersAI(args.config)
+        
+        # Ustaw flagi z argumentów
+        if args.gui:
+            app.config_manager.set('enable_gui', True)
+        if args.test:
+            app.config_manager.set('test_mode', True)
+        
+        # Uruchom aplikację
+        app.run()
+        
     except KeyboardInterrupt:
-        logger.info("Przerwano przez użytkownika")
+        print("\nPrzerwano przez użytkownika")
     except Exception as e:
-        logger.error(f"Błąd podczas uruchamiania: {e}")
-        raise
+        print(f"Krytyczny błąd: {e}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

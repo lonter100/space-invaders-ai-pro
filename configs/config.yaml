@@ -1,35 +1,76 @@
-reward:
-  shoot_enemy: 200
-  remove_enemy: 1
-  lose_life: -100
-  finish_game: -2
-  survive_frame: 0.1
-  avoid_enemy: 2
-  fast_kill_bonus: 100
-  idle_penalty: -5
-  edge_penalty: -10
-  round_bonus: 500
-  cleared_wave: 300
-  missed_shot_penalty: -20
-  formation_broken: 100
-  row_broken: 50
-  column_broken: 50
-  cluster_broken: 75
-  too_close_to_enemy: -100
-  safe_distance: 10
-  very_safe_distance: 20
-  avoided_enemy: 5
+# Space Invaders AI Pro v3.0 Configuration
+# ========================================
 
-agent:
-  type: DoubleDQN
-  per: true
+ai:
+  learning_rate: 1.0e-4
   gamma: 0.99
-  lr: 0.0001
-  buffer_size: 1000000
-  batch_size: 64
   epsilon_start: 1.0
   epsilon_min: 0.05
   epsilon_decay: 0.995
-  update_target_steps: 1000
-  checkpoint_interval: 1000
-  stack_size: 4 
+  batch_size: 32
+  buffer_size: 10000
+  target_update_freq: 1000
+  device: "auto"  # auto, cpu, cuda
+
+vision:
+  player_color_lower: [0, 0, 200]
+  player_color_upper: [100, 100, 255]
+  enemy_color_lower: [0, 200, 0]
+  enemy_color_upper: [100, 255, 100]
+  score_region: [55, 95, 22, 170]
+  score_threshold: 150
+  template_match_threshold: 0.7
+  min_enemy_size: 5
+  max_enemy_size: 50
+
+control:
+  action_delay: 0.01
+  menu_delay: 0.05
+  key_mappings:
+    left: "a"
+    right: "d"
+    up: "w"
+    down: "s"
+    shoot: "f"
+    menu_select: "p"
+
+performance:
+  enable_monitoring: true
+  fps_threshold: 30.0
+  memory_threshold: 80.0
+  cpu_threshold: 90.0
+  auto_save_interval: 300  # seconds
+  max_history_size: 1000
+
+logging:
+  level: "INFO"
+  file_enabled: true
+  console_enabled: true
+  max_file_size: 10485760  # 10MB
+  backup_count: 5
+  log_ai_decisions: true
+
+gui:
+  enable_gui: false
+  window_width: 800
+  window_height: 600
+  theme: "dark"
+  update_interval: 100  # milliseconds
+
+testing:
+  test_mode: false
+  headless_mode: false
+  save_debug_images: false
+  log_ai_decisions: true
+  performance_testing: false
+
+advanced:
+  enable_prediction: true
+  enable_formation_detection: true
+  enable_danger_zones: true
+  enable_shot_analysis: true
+  enable_enemy_tracking: true
+  max_prediction_steps: 30
+  safe_distance: 40
+  very_safe_distance: 80
+  edge_threshold: 30 
