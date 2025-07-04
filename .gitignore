@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+
+# VSCode
+.vscode/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logi
+*.log
+log_ai.txt
+
+# Środowiska
+.env
+.venv
+venv/
+ENV/ 
