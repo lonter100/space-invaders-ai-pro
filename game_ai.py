@@ -70,6 +70,7 @@ class GameAI:
         self.VERY_SAFE_DISTANCE = 80  # px
         self.total_reward = 0.0
         self.last_logged_round = 1
+        self.last_enemy_kill_frame = 0  # Dodaję brakującą zmienną
 
     def _is_at_edge(self, player_pos: Tuple[float, float]) -> bool:
         """Check if player is near the edge of the screen"""
@@ -88,7 +89,12 @@ class GameAI:
         player_x, player_y = player_pos
         for enemy in enemies:
             if len(enemy) >= 2:  # Ensure enemy has at least x,y coordinates
-                dist = np.sqrt((enemy[0] - player_x)**2 + (enemy[1] - player_y)**2)
+                if len(enemy) == 4:  # (x, y, w, h) format
+                    enemy_x, enemy_y = enemy[0] + enemy[2]//2, enemy[1] + enemy[3]//2
+                else:  # (x, y) format
+                    enemy_x, enemy_y = enemy[0], enemy[1]
+                    
+                dist = np.sqrt((enemy_x - player_x)**2 + (enemy_y - player_y)**2)
                 if dist < self.SAFE_DISTANCE:
                     return True
         return False
@@ -125,7 +131,18 @@ class GameAI:
         if len(enemies) < 3:
             return False
         # Convert to numpy array if needed
-        enemies_array = np.array([(x, y) for (x, y) in enemies])
+        enemy_positions = []
+        for enemy in enemies:
+            if len(enemy) >= 2:
+                if len(enemy) == 4:  # (x, y, w, h)
+                    enemy_positions.append((enemy[0] + enemy[2]//2, enemy[1] + enemy[3]//2))
+                else:  # (x, y)
+                    enemy_positions.append((enemy[0], enemy[1]))
+        
+        if len(enemy_positions) < 3:
+            return False
+            
+        enemies_array = np.array(enemy_positions)
         ys = enemies_array[:, 1]
         return np.std(ys) < tolerance
 
@@ -134,7 +151,18 @@ class GameAI:
         if len(enemies) < 3:
             return False
         # Convert to numpy array if needed
-        enemies_array = np.array([(x, y) for (x, y) in enemies])
+        enemy_positions = []
+        for enemy in enemies:
+            if len(enemy) >= 2:
+                if len(enemy) == 4:  # (x, y, w, h)
+                    enemy_positions.append((enemy[0] + enemy[2]//2, enemy[1] + enemy[3]//2))
+                else:  # (x, y)
+                    enemy_positions.append((enemy[0], enemy[1]))
+        
+        if len(enemy_positions) < 3:
+            return False
+            
+        enemies_array = np.array(enemy_positions)
         xs = enemies_array[:, 0]
         return np.std(xs) < tolerance
 
@@ -142,14 +170,35 @@ class GameAI:
         """Detect if enemies are clustered together within max_distance"""
         if len(enemies) < 3:
             return False
-        enemies_array = np.array([(x, y) for (x, y) in enemies])
+        # Convert to numpy array if needed
+        enemy_positions = []
+        for enemy in enemies:
+            if len(enemy) >= 2:
+                if len(enemy) == 4:  # (x, y, w, h)
+                    enemy_positions.append((enemy[0] + enemy[2]//2, enemy[1] + enemy[3]//2))
+                else:  # (x, y)
+                    enemy_positions.append((enemy[0], enemy[1]))
+        
+        if len(enemy_positions) < 3:
+            return False
+            
+        enemies_array = np.array(enemy_positions)
         dists = np.linalg.norm(enemies_array - enemies_array.mean(axis=0), axis=1)
         return np.max(dists) < max_distance
 
     def _update_enemy_tracking(self, current_enemies: List[Tuple[float, float]]) -> None:
         """Update enemy tracking and prediction"""
+        # Convert enemies to (x, y) format for tracking
+        enemy_positions = []
+        for enemy in current_enemies:
+            if len(enemy) >= 2:
+                if len(enemy) == 4:  # (x, y, w, h)
+                    enemy_positions.append((enemy[0] + enemy[2]//2, enemy[1] + enemy[3]//2))
+                else:  # (x, y)
+                    enemy_positions.append((enemy[0], enemy[1]))
+        
         # Update enemy positions and velocities
-        self.enemy_positions = self.enemy_tracker.update(current_enemies)
+        self.enemy_positions = self.enemy_tracker.update(enemy_positions)
         
         # Predict future positions (next 30 frames)
         self.predicted_enemy_positions = self.enemy_tracker.predict_future_positions(steps=30)
@@ -275,16 +324,26 @@ class GameAI:
             events['formation_broken'] = True
         # Zaawansowana logika stref bezpieczeństwa
         if player_pos and enemies:
-            dists = [np.linalg.norm(np.array(player_pos) - np.array(e)) for e in enemies]
-            min_dist = min(dists) if dists else 999
-            if min_dist < self.SAFE_DISTANCE:
-                events['too_close_to_enemy'] = True
-            elif self.SAFE_DISTANCE <= min_dist < self.VERY_SAFE_DISTANCE:
-                events['safe_distance'] = True
-            elif min_dist >= self.VERY_SAFE_DISTANCE:
-                events['very_safe_distance'] = True
-            if min_dist > self.SAFE_DISTANCE * 1.5:
-                events['avoided_enemy'] = True
+            # Konwertuj wrogów do formatu (x, y) jeśli są w formacie (x, y, w, h)
+            enemy_positions = []
+            for enemy in enemies:
+                if len(enemy) >= 2:
+                    if len(enemy) == 4:  # (x, y, w, h)
+                        enemy_positions.append((enemy[0] + enemy[2]//2, enemy[1] + enemy[3]//2))
+                    else:  # (x, y)
+                        enemy_positions.append((enemy[0], enemy[1]))
+            
+            if enemy_positions:
+                dists = [np.linalg.norm(np.array(player_pos) - np.array(e)) for e in enemy_positions]
+                min_dist = min(dists) if dists else 999
+                if min_dist < self.SAFE_DISTANCE:
+                    events['too_close_to_enemy'] = True
+                elif self.SAFE_DISTANCE <= min_dist < self.VERY_SAFE_DISTANCE:
+                    events['safe_distance'] = True
+                elif min_dist >= self.VERY_SAFE_DISTANCE:
+                    events['very_safe_distance'] = True
+                if min_dist > self.SAFE_DISTANCE * 1.5:
+                    events['avoided_enemy'] = True
         return events
 
     def detect_hall_of_fame(self, img):
