@@ -1,0 +1,1 @@
+Zaawansowany system AI do gry Space Invaders, oparty na Deep Q-Learning (DQN), z automatycznym wykrywaniem obiektów, sterowaniem i monitoringiem. Idealny do eksperymentów z reinforcement learningiem i computer vision na grach retro. 
