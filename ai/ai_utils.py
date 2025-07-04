@@ -279,6 +279,11 @@ def ai_decision(player_pos, enemies, dqn_agent=None, state=None, menu=False, img
         else:
             return None
     if dqn_agent is not None and state is not None:
+        # Sprawdź czy agent ma model LSTM
+        agent_model = getattr(dqn_agent, 'model', None)
+        is_lstm = hasattr(agent_model, 'lstm') if agent_model else False
+        
+        # Przekaż state bezpośrednio do agenta - agent sam obsłuży format
         action = dqn_agent.select_action(state)
         return action
     # Ulepszona logika: AI strzela, jeśli jakakolwiek część bounding boxa wroga jest na linii strzału.

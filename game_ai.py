@@ -71,6 +71,7 @@ class GameAI:
         self.total_reward = 0.0
         self.last_logged_round = 1
         self.last_enemy_kill_frame = 0  # Dodaję brakującą zmienną
+        self.state_seq = deque(maxlen=4)  # Bufor sekwencji stanów
 
     def _is_at_edge(self, player_pos: Tuple[float, float]) -> bool:
         """Check if player is near the edge of the screen"""
@@ -360,8 +361,6 @@ class GameAI:
                 img = grab_screen(self.game_region)
                 self.frame_count += 1
                 state_hash = hash(img.tobytes())
-                # Odświeżaj stan co każdą klatkę (nie co 10)
-                # if self.frame_count % 10 == 0 or state_hash != self.last_state_hash:
                 self.score = read_score(img)
                 self.lives = detect_lives(img)
                 self.done = detect_gameover(img) or (self.lives == 0)
@@ -379,25 +378,53 @@ class GameAI:
                 if self.menu:
                     self.logger.info('Wykryto menu gry – AI zawsze wybiera: P + ENTER')
                     perform_action('menu_select')
-                    self.total_reward = 0.0  # Reset sumy nagród po wejściu do menu/po naciśnięciu play
+                    self.total_reward = 0.0
                     time.sleep(1)
                     continue
                 player_pos = detect_player(img)
                 enemies = detect_enemies(img)
                 state = self.preprocess(img)
-                action_str = ai_decision(player_pos, enemies, dqn_agent=self.agent, state=state, menu=self.menu)
+                self.state_seq.append(state)
+                agent_model = getattr(self.agent, 'model', None)
+                is_lstm = hasattr(agent_model, 'lstm')
+                if is_lstm:
+                    # Zawsze przekazuj sekwencję (nawet jeśli krótsza niż maxlen)
+                    seq = list(self.state_seq)
+                    while len(seq) < self.state_seq.maxlen:
+                        seq.insert(0, seq[0])
+                    state_input = np.stack(seq, axis=0)[None, ...]  # (1, seq, 3, 84, 84)
+                else:
+                    state_input = state[None, ...]
+                action_str = ai_decision(player_pos, enemies, dqn_agent=self.agent, state=state_input, menu=self.menu)
                 perform_action(action_str)
                 self.prev_action = action_str
                 events = self.get_events(self.prev_score, self.score, self.prev_enemies, enemies, self.prev_lives, self.lives, self.done, player_pos, img)
-                reward = calc_reward(self.prev_score, self.score, events, self.reward_cfg)
+                reward = calc_reward(self.prev_score, self.score, events, self.reward_cfg.cfg)
                 self.total_reward += reward
-                # Reset sumy nagród na początku nowej rundy
                 if events.get('round_advanced') or self.round != self.last_logged_round:
                     self.logger.info(f'--- KONIEC RUNDY {self.prev_round} --- SUMA NAGRÓD: {self.total_reward:.2f}')
                     self.total_reward = 0.0
                     self.last_logged_round = self.round
                 self.logger.info(f'Frame: {self.frame_count}, Score: {self.score}, Lives: {self.lives}, Action: {action_str}, Reward: {reward}, TotalReward: {self.total_reward:.2f}, Done: {self.done}')
-                self.agent.remember(self.prev_state, action_str, reward, state, self.done)
+                # --- Poprawka: zapisywanie sekwencji do replay buffer dla LSTM ---
+                if is_lstm:
+                    # Sprawdź czy mamy wystarczająco stanów w sekwencji
+                    if len(self.state_seq) > 1:
+                        prev_seq = list(self.state_seq)[:-1]
+                    else:
+                        # Jeśli mamy tylko jeden stan, użyj go jako poprzedni
+                        prev_seq = list(self.state_seq)
+                    
+                    while len(prev_seq) < self.state_seq.maxlen:
+                        prev_seq.insert(0, prev_seq[0])
+                    next_seq = list(self.state_seq)
+                    while len(next_seq) < self.state_seq.maxlen:
+                        next_seq.insert(0, next_seq[0])
+                    prev_seq_np = np.stack(prev_seq, axis=0)[None, ...]
+                    next_seq_np = np.stack(next_seq, axis=0)[None, ...]
+                    self.agent.remember(prev_seq_np, action_str, reward, next_seq_np, self.done)
+                else:
+                    self.agent.remember(self.prev_state, action_str, reward, state, self.done)
                 self.agent.update()
                 self.prev_state = state
                 self.prev_score = self.score
@@ -420,7 +447,6 @@ class GameAI:
                     self.logger.warning(f'Nie można ustawić pozycji/rozmiaru okna podglądu: {e}')
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-                # time.sleep(0.01)  # Usuwam lub zmieniam na 0, by zminimalizować opóźnienie
             except Exception as e:
                 self.logger.error(f'Błąd główny: {e}')
         self.agent.save()

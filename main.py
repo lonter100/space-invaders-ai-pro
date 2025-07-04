@@ -47,9 +47,16 @@ from configs.config import (
     LEARNING_RATE, GAMMA, EPSILON_START, EPSILON_MIN, EPSILON_DECAY
 )
 from game_ai import GameAI
-from utils.performance_monitor import PerformanceMonitor
-from utils.config_manager import ConfigManager
-from utils.gui_manager import GUIManager
+
+# Opcjonalne importy dla nowych modułów
+try:
+    from utils.performance_monitor import PerformanceMonitor
+    from utils.config_manager import ConfigManager
+    from utils.gui_manager import GUIManager
+    NEW_MODULES_AVAILABLE = True
+except ImportError:
+    NEW_MODULES_AVAILABLE = False
+    print("Uwaga: Niektóre zaawansowane moduły nie są dostępne")
 
 
 class SpaceInvadersAI:
@@ -73,9 +80,16 @@ class SpaceInvadersAI:
         """
         self.config_path = config_path
         self.logger = setup_logger('space_invaders_ai_v3')
-        self.performance_monitor = PerformanceMonitor()
-        self.config_manager = ConfigManager(config_path)
-        self.gui_manager = None
+        
+        # Inicjalizuj opcjonalne moduły
+        if NEW_MODULES_AVAILABLE:
+            self.performance_monitor = PerformanceMonitor()
+            self.config_manager = ConfigManager(config_path)
+            self.gui_manager = None
+        else:
+            self.performance_monitor = None
+            self.config_manager = None
+            self.gui_manager = None
         
         # Sprawdź wymagania systemowe
         self._check_system_requirements()
@@ -114,7 +128,7 @@ class SpaceInvadersAI:
         """Inicjalizuj komponenty aplikacji."""
         try:
             # Inicjalizuj GUI (opcjonalnie)
-            if self.config_manager.get('enable_gui', False):
+            if NEW_MODULES_AVAILABLE and self.config_manager and self.config_manager.get('gui.enable_gui', False):
                 self.gui_manager = GUIManager()
                 self.logger.info("GUI zainicjalizowane")
             
@@ -152,7 +166,8 @@ class SpaceInvadersAI:
             game_ai = GameAI(self.config_path)
             
             # Uruchom monitoring wydajności
-            self.performance_monitor.start()
+            if self.performance_monitor:
+                self.performance_monitor.start()
             
             # Główna pętla
             self._main_loop(game_ai)
@@ -175,12 +190,13 @@ class SpaceInvadersAI:
                 frame_start = time.time()
                 
                 # Uruchom AI
-                game_ai.run_single_frame()
+                game_ai.run()
                 frame_count += 1
                 
                 # Monitoring wydajności
-                frame_time = time.time() - frame_start
-                self.performance_monitor.update(frame_time)
+                if self.performance_monitor:
+                    frame_time = time.time() - frame_start
+                    self.performance_monitor.update(frame_time)
                 
                 # Logowanie co 100 klatek
                 if frame_count % 100 == 0:
@@ -212,7 +228,8 @@ class SpaceInvadersAI:
         self.logger.info("Czyszczenie zasobów...")
         
         # Zatrzymaj monitoring
-        self.performance_monitor.stop()
+        if self.performance_monitor:
+            self.performance_monitor.stop()
         
         # Zamknij GUI
         if self.gui_manager:
@@ -288,10 +305,10 @@ def main():
         app = SpaceInvadersAI(args.config)
         
         # Ustaw flagi z argumentów
-        if args.gui:
-            app.config_manager.set('enable_gui', True)
-        if args.test:
-            app.config_manager.set('test_mode', True)
+        if args.gui and NEW_MODULES_AVAILABLE and app.config_manager:
+            app.config_manager.set('gui.enable_gui', True)
+        if args.test and app.config_manager:
+            app.config_manager.set('testing.test_mode', True)
         
         # Uruchom aplikację
         app.run()

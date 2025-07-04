@@ -107,7 +107,19 @@ class CNNAgent:
         if random.random() < self.epsilon:
             action = random.randrange(self.n_actions)
         else:
-            state_v = torch.tensor(np.array([state]), device=self.device).float().permute(0,3,1,2)
+            # Konwertuj state do tensora
+            if isinstance(state, np.ndarray):
+                state_v = torch.tensor(state, device=self.device).float()
+            else:
+                state_v = state.to(self.device).float()
+            
+            # Sprawdź wymiary i dostosuj format
+            if len(state_v.shape) == 5:  # (batch, seq, C, H, W)
+                state_v = state_v[:, -1, ...]  # Weź ostatnią klatkę z sekwencji
+            if state_v.shape[-1] == 3:  # (batch, H, W, C)
+                state_v = state_v.permute(0, 3, 1, 2)  # (batch, C, H, W)
+            state_v = state_v / 255.0
+            
             q_vals = self.model(state_v)
             _, action = torch.max(q_vals, dim=1)
             action = int(action.item())
@@ -116,14 +128,25 @@ class CNNAgent:
         if len(self.buffer) < self.batch_size:
             return
         state, action, reward, next_state, done = self.buffer.sample(self.batch_size)
-        state = torch.tensor(state, device=self.device).permute(0,3,1,2).float() / 255.0
-        next_state = torch.tensor(next_state, device=self.device).permute(0,3,1,2).float() / 255.0
+        # --- Poprawka obsługi wymiarów ---
+        state_tensor = torch.tensor(state, device=self.device).float()
+        next_state_tensor = torch.tensor(next_state, device=self.device).float()
+        if state_tensor.dim() == 5:
+            state_tensor = state_tensor[:, -1, ...]
+        if next_state_tensor.dim() == 5:
+            next_state_tensor = next_state_tensor[:, -1, ...]
+        if state_tensor.shape[-1] == 3:
+            state_tensor = state_tensor.permute(0, 3, 1, 2)
+        if next_state_tensor.shape[-1] == 3:
+            next_state_tensor = next_state_tensor.permute(0, 3, 1, 2)
+        state_tensor = state_tensor / 255.0
+        next_state_tensor = next_state_tensor / 255.0
         action = torch.tensor([['left', 'right', 'up', 'down', 'space'].index(a) for a in action], device=self.device).long()
         reward = torch.tensor(reward, device=self.device).float()
         done = torch.tensor(done, device=self.device).float()
-        q_values = self.model(state).gather(1, action.unsqueeze(1)).squeeze(1)
+        q_values = self.model(state_tensor).gather(1, action.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
-            next_q = self.target_model(next_state).max(1)[0]
+            next_q = self.target_model(next_state_tensor).max(1)[0]
             expected_q = reward + self.gamma * next_q * (1 - done)
         loss = nn.MSELoss()(q_values, expected_q)
         self.optimizer.zero_grad()
@@ -163,7 +186,22 @@ class CNNRNNAgent:
         if random.random() < self.epsilon:
             action = random.randrange(self.n_actions)
         else:
-            state_v = torch.tensor(np.array([state]), device=self.device).float().permute(0,3,1,2)
+            # Konwertuj state do tensora
+            if isinstance(state, np.ndarray):
+                state_v = torch.tensor(state, device=self.device).float()
+            else:
+                state_v = state.to(self.device).float()
+            
+            # Sprawdź wymiary i dostosuj format dla LSTM
+            if len(state_v.shape) == 5:  # (batch, seq, C, H, W) - już w formacie sekwencji
+                # Normalizuj wartości pikseli
+                state_v = state_v / 255.0
+            elif len(state_v.shape) == 4:  # (batch, C, H, W) - dodaj wymiar sekwencji
+                state_v = state_v.unsqueeze(1) / 255.0
+            else:
+                # Nieoczekiwany format - spróbuj naprawić
+                state_v = state_v.view(1, -1, 3, 84, 84) / 255.0
+            
             q_vals, _ = self.model(state_v)
             _, action = torch.max(q_vals, dim=1)
             action = int(action.item())
@@ -172,15 +210,25 @@ class CNNRNNAgent:
         if len(self.buffer) < self.batch_size:
             return
         state, action, reward, next_state, done = self.buffer.sample(self.batch_size)
-        state = torch.tensor(state, device=self.device).permute(0,3,1,2).float() / 255.0
-        next_state = torch.tensor(next_state, device=self.device).permute(0,3,1,2).float() / 255.0
+        
+        # Konwertuj stany do odpowiedniego formatu dla LSTM
+        state_tensor = torch.tensor(state, device=self.device).float() / 255.0
+        next_state_tensor = torch.tensor(next_state, device=self.device).float() / 255.0
+        
+        # Dostosuj wymiary dla LSTM - dodaj wymiar sekwencji jeśli potrzebny
+        if len(state_tensor.shape) == 4:  # (batch, C, H, W)
+            state_tensor = state_tensor.unsqueeze(1)  # (batch, 1, C, H, W)
+        if len(next_state_tensor.shape) == 4:  # (batch, C, H, W)
+            next_state_tensor = next_state_tensor.unsqueeze(1)  # (batch, 1, C, H, W)
+        
         action = torch.tensor([['left', 'right', 'up', 'down', 'space'].index(a) for a in action], device=self.device).long()
         reward = torch.tensor(reward, device=self.device).float()
         done = torch.tensor(done, device=self.device).float()
-        q_values, _ = self.model(state)
+        
+        q_values, _ = self.model(state_tensor)
         q_values = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
-            next_q, _ = self.target_model(next_state)
+            next_q, _ = self.target_model(next_state_tensor)
             next_q = next_q.max(1)[0]
             expected_q = reward + self.gamma * next_q * (1 - done)
         loss = nn.MSELoss()(q_values, expected_q)
@@ -221,7 +269,24 @@ class SimpleRNNAgent:
         if random.random() < self.epsilon:
             action = random.randrange(self.n_actions)
         else:
-            state_v = torch.tensor(np.array([state]), device=self.device).float().permute(0,3,1,2)
+            # Konwertuj state do tensora
+            if isinstance(state, np.ndarray):
+                state_v = torch.tensor(state, device=self.device).float()
+            else:
+                state_v = state.to(self.device).float()
+            
+            # Sprawdź wymiary i dostosuj format dla RNN
+            if len(state_v.shape) == 5:  # (batch, seq, C, H, W)
+                # Spłaszcz do (batch, seq, features)
+                batch, seq, C, H, W = state_v.shape
+                state_v = state_v.view(batch, seq, C * H * W)
+            elif len(state_v.shape) == 4:  # (batch, C, H, W)
+                # Dodaj wymiar sekwencji
+                state_v = state_v.view(state_v.shape[0], 1, -1)
+            elif len(state_v.shape) == 3:  # (batch, H, W, C)
+                # Permutuj i spłaszcz
+                state_v = state_v.permute(0, 3, 1, 2).view(state_v.shape[0], 1, -1)
+            
             q_vals, _ = self.model(state_v)
             _, action = torch.max(q_vals, dim=1)
             action = int(action.item())
@@ -230,15 +295,36 @@ class SimpleRNNAgent:
         if len(self.buffer) < self.batch_size:
             return
         state, action, reward, next_state, done = self.buffer.sample(self.batch_size)
-        state = torch.tensor(state, device=self.device).permute(0,3,1,2).float() / 255.0
-        next_state = torch.tensor(next_state, device=self.device).permute(0,3,1,2).float() / 255.0
+        
+        # Konwertuj stany do odpowiedniego formatu dla RNN
+        state_tensor = torch.tensor(state, device=self.device).float()
+        next_state_tensor = torch.tensor(next_state, device=self.device).float()
+        
+        # Sprawdź wymiary i dostosuj format
+        if state_tensor.dim() == 5:  # (batch, seq, C, H, W)
+            batch, seq, C, H, W = state_tensor.shape
+            state_tensor = state_tensor.view(batch, seq, C * H * W)
+        elif state_tensor.dim() == 4:  # (batch, C, H, W)
+            state_tensor = state_tensor.view(state_tensor.shape[0], 1, -1)
+        elif state_tensor.dim() == 3:  # (batch, H, W, C)
+            state_tensor = state_tensor.permute(0, 3, 1, 2).view(state_tensor.shape[0], 1, -1)
+        
+        if next_state_tensor.dim() == 5:  # (batch, seq, C, H, W)
+            batch, seq, C, H, W = next_state_tensor.shape
+            next_state_tensor = next_state_tensor.view(batch, seq, C * H * W)
+        elif next_state_tensor.dim() == 4:  # (batch, C, H, W)
+            next_state_tensor = next_state_tensor.view(next_state_tensor.shape[0], 1, -1)
+        elif next_state_tensor.dim() == 3:  # (batch, H, W, C)
+            next_state_tensor = next_state_tensor.permute(0, 3, 1, 2).view(next_state_tensor.shape[0], 1, -1)
+        
         action = torch.tensor([['left', 'right', 'up', 'down', 'space'].index(a) for a in action], device=self.device).long()
         reward = torch.tensor(reward, device=self.device).float()
         done = torch.tensor(done, device=self.device).float()
-        q_values, _ = self.model(state)
+        
+        q_values, _ = self.model(state_tensor)
         q_values = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
-            next_q, _ = self.target_model(next_state)
+            next_q, _ = self.target_model(next_state_tensor)
             next_q = next_q.max(1)[0]
             expected_q = reward + self.gamma * next_q * (1 - done)
         loss = nn.MSELoss()(q_values, expected_q)
@@ -285,7 +371,19 @@ class DoubleDQNAgent:
         if random.random() < self.epsilon:
             action = random.randrange(self.n_actions)
         else:
-            state_v = torch.tensor(np.array([state]), device=self.device).float().permute(0,3,1,2)
+            # Konwertuj state do tensora
+            if isinstance(state, np.ndarray):
+                state_v = torch.tensor(state, device=self.device).float()
+            else:
+                state_v = state.to(self.device).float()
+            
+            # Sprawdź wymiary i dostosuj format
+            if len(state_v.shape) == 5:  # (batch, seq, C, H, W)
+                state_v = state_v[:, -1, ...]  # Weź ostatnią klatkę z sekwencji
+            if state_v.shape[-1] == 3:  # (batch, H, W, C)
+                state_v = state_v.permute(0, 3, 1, 2)  # (batch, C, H, W)
+            state_v = state_v / 255.0
+            
             q_vals = self.model(state_v)
             _, action = torch.max(q_vals, dim=1)
             action = int(action.item())
@@ -298,8 +396,19 @@ class DoubleDQNAgent:
         else:
             state, action, reward, next_state, done = self.buffer.sample(self.batch_size)
             weights = np.ones(self.batch_size, dtype=np.float32)
-        state = torch.tensor(state, device=self.device).permute(0,3,1,2).float() / 255.0
-        next_state = torch.tensor(next_state, device=self.device).permute(0,3,1,2).float() / 255.0
+        # --- Poprawka obsługi wymiarów ---
+        state_tensor = torch.tensor(state, device=self.device).float()
+        next_state_tensor = torch.tensor(next_state, device=self.device).float()
+        if state_tensor.dim() == 5:
+            state_tensor = state_tensor[:, -1, ...]
+        if next_state_tensor.dim() == 5:
+            next_state_tensor = next_state_tensor[:, -1, ...]
+        if state_tensor.shape[-1] == 3:
+            state_tensor = state_tensor.permute(0, 3, 1, 2)
+        if next_state_tensor.shape[-1] == 3:
+            next_state_tensor = next_state_tensor.permute(0, 3, 1, 2)
+        state_tensor = state_tensor / 255.0
+        next_state_tensor = next_state_tensor / 255.0
         # Popraw obsługę typu akcji (int lub string)
         if isinstance(action[0], (int, np.integer)):
             action_tensor = torch.tensor(action, device=self.device).long()
@@ -310,12 +419,12 @@ class DoubleDQNAgent:
         weights = torch.tensor(weights, device=self.device).float()
         # Double DQN update
         with torch.no_grad():
-            next_q_online = self.model(next_state)
+            next_q_online = self.model(next_state_tensor)
             next_actions = next_q_online.argmax(1)
-            next_q_target = self.target_model(next_state)
+            next_q_target = self.target_model(next_state_tensor)
             next_q = next_q_target.gather(1, next_actions.unsqueeze(1)).squeeze(1)
             expected_q = reward + self.gamma * next_q * (1 - done)
-        q_values = self.model(state).gather(1, action_tensor.unsqueeze(1)).squeeze(1)
+        q_values = self.model(state_tensor).gather(1, action_tensor.unsqueeze(1)).squeeze(1)
         loss = (weights * (q_values - expected_q) ** 2).mean()
         self.optimizer.zero_grad()
         loss.backward()
